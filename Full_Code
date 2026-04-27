@@ -1,0 +1,397 @@
+clc; clear; close all;
+
+num_bits = 1e2;
+data_bits = randi([0 1], 1, num_bits);
+EbNo_dB = -2:1:14;
+EbNo_lin = 10.^(EbNo_dB/10);
+
+BER_BPSK = zeros(1, length(EbNo_dB));
+BER_QPSK = zeros(2, length(EbNo_dB));
+BER_16QAM = zeros(size(EbNo_dB));
+BER_8PSK = zeros(size(EbNo_dB));
+BER_BFSK = zeros(1, length(EbNo_dB));
+
+th_BER_BPSK = zeros(size(EbNo_dB));
+th_BER_QPSK1 = zeros(size(EbNo_dB));
+th_BER_QPSK2 = zeros(size(EbNo_dB));
+th_BER_16QAM = zeros(size(EbNo_dB));
+th_BER_8PSK = zeros(size(EbNo_dB));
+th_BER_BFSK = zeros(size(EbNo_dB));
+
+%% BPSK
+
+Si = 2*data_bits - 1;
+k = 1;
+
+for i = 1:length(EbNo_dB)
+    sigma2 = 1/(2 * k * EbNo_lin(i));
+    noise = sqrt(sigma2) * randn(1, num_bits);
+    Xi = Si + noise;
+
+    received_data = zeros(1, num_bits);
+    for j = 1:length(Xi)
+        if Xi(j) > 0
+            received_data(j) = 1;
+        end
+    end
+
+    BER_BPSK(i) = sum(data_bits ~= received_data) / num_bits;
+end
+
+th_BER_BPSK = 0.5 * erfc(sqrt(EbNo_lin));
+
+%% QPSK
+
+k = 2;
+QPSK_maps = (1/sqrt(2)) * [(-1-1j), (-1+1j), (1-1j), (1+1j);
+                          (-1-1j), (-1+1j), (1+1j), (1-1j)];
+
+for x = 1:2
+    for i = 1:length(EbNo_dB)
+
+        bit_pairs = reshape(data_bits, 2, []).';
+        sym_id = bit_pairs(:,1)*2 + bit_pairs(:,2);
+        Si = QPSK_maps(x, sym_id + 1);
+
+        sigma2 = 1/(2 * k * EbNo_lin(i));
+        noise = sqrt(sigma2) * (randn(1,length(Si)) + 1j*randn(1,length(Si)));
+        Xi = Si + noise;
+
+        [~, dec_idx] = min(abs(Xi.' - QPSK_maps(x,:)), [], 2);
+        dec_idx = dec_idx.' - 1;
+
+        received_data = zeros(1, num_bits);
+        received_data(1:2:end) = floor(dec_idx/2);
+        received_data(2:2:end) = mod(dec_idx, 2);
+
+        BER_QPSK(x,i) = sum(data_bits ~= received_data) / num_bits;
+    end
+end
+
+th_BER_QPSK1 = 0.5 * erfc(sqrt(EbNo_lin));
+th_BER_QPSK2 = erfc(sqrt(EbNo_lin));
+
+%% 16-QAM
+
+k = 4;
+
+bits = data_bits;
+if mod(length(bits),4) ~= 0
+    bits = [bits zeros(1, 4 - mod(length(bits),4))];
+end
+
+bits_reshaped = reshape(bits, k, []).';
+symbols = zeros(size(bits_reshaped,1),1);
+
+for n = 1:size(bits_reshaped,1)
+
+    b = bits_reshaped(n,:);
+
+    if isequal(b(1:2), [0 0])
+        I = -3;
+    elseif isequal(b(1:2), [0 1])
+        I = -1;
+    elseif isequal(b(1:2), [1 1])
+        I = +1;
+    else
+        I = +3;
+    end
+
+    if isequal(b(3:4), [0 0])
+        Q = -3;
+    elseif isequal(b(3:4), [0 1])
+        Q = -1;
+    elseif isequal(b(3:4), [1 1])
+        Q = +1;
+    else
+        Q = +3;
+    end
+
+    symbols(n) = I + 1j*Q;
+end
+
+symbols = symbols / sqrt(10);
+
+for i = 1:length(EbNo_dB)
+
+    EbNo = EbNo_lin(i);
+    N0 = 1 / (k * EbNo);
+
+    noise = sqrt(N0/2) * (randn(size(symbols)) + 1j*randn(size(symbols)));
+    received = symbols + noise;
+
+    bits_rx = zeros(size(bits_reshaped));
+
+    for n = 1:length(received)
+
+        r = received(n) * sqrt(10);
+
+        if real(r) < -2
+            bits_rx(n,1:2) = [0 0];
+        elseif real(r) < 0
+            bits_rx(n,1:2) = [0 1];
+        elseif real(r) < 2
+            bits_rx(n,1:2) = [1 1];
+        else
+            bits_rx(n,1:2) = [1 0];
+        end
+
+        if imag(r) < -2
+            bits_rx(n,3:4) = [0 0];
+        elseif imag(r) < 0
+            bits_rx(n,3:4) = [0 1];
+        elseif imag(r) < 2
+            bits_rx(n,3:4) = [1 1];
+        else
+            bits_rx(n,3:4) = [1 0];
+        end
+    end
+
+    bits_rx = reshape(bits_rx.',1,[]);
+    errors = sum(bits ~= bits_rx);
+
+    if errors == 0
+        BER_16QAM(i) = 1/num_bits;
+    else
+        BER_16QAM(i) = errors / num_bits;
+    end
+
+    th_BER_16QAM(i) = (3/4)*qfunc(sqrt((4/5)*EbNo));
+end
+
+%% 8-PSK
+
+k = 3;
+
+bits = data_bits;
+if mod(length(bits),3) ~= 0
+    bits = [bits zeros(1, 3 - mod(length(bits),3))];
+end
+
+bits_reshaped = reshape(bits, k, []).';
+symbols = zeros(size(bits_reshaped,1),1);
+
+for n = 1:size(bits_reshaped,1)
+
+    b = bits_reshaped(n,:);
+
+    if isequal(b,[0 0 0])
+        theta = 0;
+    elseif isequal(b,[0 0 1])
+        theta = pi/4;
+    elseif isequal(b,[0 1 1])
+        theta = pi/2;
+    elseif isequal(b,[0 1 0])
+        theta = 3*pi/4;
+    elseif isequal(b,[1 1 0])
+        theta = pi;
+    elseif isequal(b,[1 1 1])
+        theta = 5*pi/4;
+    elseif isequal(b,[1 0 1])
+        theta = 3*pi/2;
+    else
+        theta = 7*pi/4;
+    end
+
+    symbols(n) = exp(1j*theta);
+end
+
+for i = 1:length(EbNo_dB)
+
+    EbNo = EbNo_lin(i);
+    N0 = 1 / (k * EbNo);
+
+    noise = sqrt(N0/2) * (randn(size(symbols)) + 1j*randn(size(symbols)));
+    received = symbols + noise;
+
+    bits_rx = zeros(size(bits_reshaped));
+
+    for n = 1:length(received)
+
+        r = received(n);
+        theta = angle(r);
+
+        if theta < 0
+            theta = theta + 2*pi;
+        end
+
+        if theta < pi/8 || theta >= 15*pi/8
+            bits_rx(n,:) = [0 0 0];
+        elseif theta < 3*pi/8
+            bits_rx(n,:) = [0 0 1];
+        elseif theta < 5*pi/8
+            bits_rx(n,:) = [0 1 1];
+        elseif theta < 7*pi/8
+            bits_rx(n,:) = [0 1 0];
+        elseif theta < 9*pi/8
+            bits_rx(n,:) = [1 1 0];
+        elseif theta < 11*pi/8
+            bits_rx(n,:) = [1 1 1];
+        elseif theta < 13*pi/8
+            bits_rx(n,:) = [1 0 1];
+        else
+            bits_rx(n,:) = [1 0 0];
+        end
+    end
+
+    bits_rx = reshape(bits_rx.',1,[]);
+    errors = sum(bits ~= bits_rx);
+
+    if errors == 0
+        BER_8PSK(i) = 1/num_bits;
+    else
+        BER_8PSK(i) = errors / num_bits;
+    end
+
+    th_BER_8PSK(i) = (2/k) * qfunc(sqrt(2*k*EbNo) * sin(pi/8));
+end
+%% BFSK
+
+k = 1;
+
+Si = zeros(1, num_bits);
+
+for n = 1:num_bits
+    if data_bits(n) == 0
+        Si(n) = -1;
+    else
+        Si(n) = +1;
+    end
+end
+
+BER_BFSK = zeros(1, length(EbNo_dB));
+th_BER_BFSK = zeros(1, length(EbNo_dB));
+
+for i = 1:length(EbNo_dB)
+
+    sigma2 = 1/(2 * k * EbNo_lin(i));
+
+    noise_I = sqrt(sigma2) * randn(1, num_bits);
+    noise_Q = sqrt(sigma2) * randn(1, num_bits);
+
+    r1 = Si + noise_I;
+    r2 = noise_Q;
+
+    received_data = zeros(1, num_bits);
+
+    for n = 1:num_bits
+        if r1(n) > r2(n)
+            received_data(n) = 1;
+        else
+            received_data(n) = 0;
+        end
+    end
+
+    BER_BFSK(i) = sum(data_bits ~= received_data) / num_bits;
+
+    th_BER_BFSK(i) = 0.5 * erfc(sqrt(EbNo_lin(i)/2));
+end
+
+%% BFSK PSD Calculation 
+
+N1 = 1e6;                % Number of bits
+Tb = 1;                 % Bit duration
+fs = 20;                % Sampling frequency (samples per Tb)
+t = 0:1/fs:Tb-1/fs;     % Time vector per bit
+df = 1/(2*Tb);          % Frequency separation (orthogonal BFSK)
+bits = randi([0 1], 1, N1);
+
+% BFSK Signal Generation
+signal = [];
+
+for n = 1:N1
+    if bits(n) == 0
+        s = exp(-1j*2*pi*df*t);
+    else
+        s = exp(1j*2*pi*df*t);
+    end
+
+    signal = [signal s];
+end
+
+% Normalize energy
+signal = signal / sqrt(Tb);
+
+%% plots
+
+figure;
+semilogy(EbNo_dB, BER_BPSK, 'o-', 'LineWidth', 2.5, 'MarkerSize', 8, 'Color', [0 0.4470 0.7410]); hold on;
+semilogy(EbNo_dB, th_BER_BPSK, '--', 'LineWidth', 2.5, 'Color', [0.8500 0.3250 0.0980]);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('BPSK sim','BPSK theory');
+set(gca,'FontSize',12,'LineWidth',1.2);
+set(gcf,'Color','w');
+
+figure;
+semilogy(EbNo_dB, BER_QPSK(1,:), 'o-', 'LineWidth', 2.5, 'MarkerSize', 8, 'Color', [0 0.4470 0.7410]); hold on;
+semilogy(EbNo_dB, th_BER_QPSK1, '--', 'LineWidth', 2.5, 'Color', [0.8500 0.3250 0.0980]);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('QPSK Gray sim','QPSK Gray theory');
+set(gca,'FontSize',12,'LineWidth',1.2);
+set(gcf,'Color','w');
+
+figure;
+semilogy(EbNo_dB, BER_QPSK(2,:), 'o-', 'LineWidth', 2.5, 'MarkerSize', 8, 'Color', [0 0.4470 0.7410]); hold on;
+semilogy(EbNo_dB, th_BER_QPSK2, '--', 'LineWidth', 2.5, 'Color', [0.8500 0.3250 0.0980]);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('QPSK nonGray sim','QPSK nonGray theory');
+set(gca,'FontSize',12,'LineWidth',1.2);
+set(gcf,'Color','w');
+
+figure;
+semilogy(EbNo_dB, BER_16QAM, 'o-', 'LineWidth', 2.5, 'MarkerSize', 8, 'Color', [0 0.4470 0.7410]); hold on;
+semilogy(EbNo_dB, th_BER_16QAM, '--', 'LineWidth', 2.5, 'Color', [0.8500 0.3250 0.0980]);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('16QAM sim','16QAM theory');
+set(gca,'FontSize',12,'LineWidth',1.2);
+set(gcf,'Color','w');
+
+figure;
+semilogy(EbNo_dB, BER_8PSK, 'o-', 'LineWidth', 2.5, 'MarkerSize', 8, 'Color', [0 0.4470 0.7410]); hold on;
+semilogy(EbNo_dB, th_BER_8PSK, '--', 'LineWidth', 2.5, 'Color', [0.8500 0.3250 0.0980]);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('8PSK sim','8PSK theory');
+set(gca,'FontSize',12,'LineWidth',1.2);
+set(gcf,'Color','w');
+
+figure;
+semilogy(EbNo_dB, BER_BFSK, 'o-', 'LineWidth', 2.5, 'MarkerSize', 8, 'Color', [0 0.4470 0.7410]); hold on;
+semilogy(EbNo_dB, th_BER_BFSK, '--', 'LineWidth', 2.5, 'Color', [0.8500 0.3250 0.0980]);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('BFSK sim','BFSK theory');
+set(gca,'FontSize',12,'LineWidth',1.2);
+set(gcf,'Color','w');
+
+% BFSK PSD Plot
+figure;
+pwelch(signal, [], [], [], fs, 'centered');
+title('PSD of BFSK Signal');
+%% combined plots
+
+% all simulations
+figure;
+semilogy(EbNo_dB, BER_BPSK, 'b-o', 'LineWidth',2); hold on;
+semilogy(EbNo_dB, BER_BFSK, 'r-s', 'LineWidth',2);
+semilogy(EbNo_dB, BER_QPSK(1,:), 'g-^', 'LineWidth',2);
+semilogy(EbNo_dB, BER_16QAM, 'm-d', 'LineWidth',2);
+semilogy(EbNo_dB, BER_8PSK, 'k-x', 'LineWidth',2);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('BPSK','BFSK','QPSK Gray','16QAM','8PSK');
+
+% all theoretical
+figure;
+semilogy(EbNo_dB, th_BER_BPSK, 'b--', 'LineWidth',2); hold on;
+semilogy(EbNo_dB, th_BER_BFSK, 'r--', 'LineWidth',2);
+semilogy(EbNo_dB, th_BER_QPSK1, 'g--', 'LineWidth',2);
+semilogy(EbNo_dB, th_BER_16QAM, 'm--', 'LineWidth',2);
+semilogy(EbNo_dB, th_BER_8PSK, 'k--', 'LineWidth',2);
+xlabel('Eb/N0 (dB)');
+ylabel('BER');
+legend('BPSK','BFSK','QPSK Gray','16QAM','8PSK');
